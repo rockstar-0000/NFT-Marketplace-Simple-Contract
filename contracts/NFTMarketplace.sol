@@ -118,7 +118,6 @@ contract NFTMarketplace is ReentrancyGuard, Ownable {
         // transfer the (item price - royalty amount - fee amount) to the seller
         item.seller.transfer(price - feeAmount - marketFee);
         payable(_feeData[nftContract].feeAccount).transfer(feeAmount);
-        payable(address(this)).transfer(marketFee);
 
         IERC721(nftContract).transferFrom(address(this), msg.sender, tokenId);
 
