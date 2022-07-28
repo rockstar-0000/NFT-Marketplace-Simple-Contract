@@ -7,6 +7,10 @@ import "@openzeppelin/contracts/token/ERC721/ERC721.sol";
 import "@openzeppelin/contracts/utils/introspection/ERC165Checker.sol";
 import "@openzeppelin/contracts/access/Ownable.sol";
 
+interface Buffer {
+    function shareReceived() external payable;
+}
+
 contract NFTMarketplace is ReentrancyGuard, Ownable {
     using Counters for Counters.Counter;
     using ERC165Checker for address;
@@ -117,7 +121,9 @@ contract NFTMarketplace is ReentrancyGuard, Ownable {
         uint256 marketFee = (250 * price) / 10000;
         // transfer the (item price - royalty amount - fee amount) to the seller
         item.seller.transfer(price - feeAmount - marketFee);
-        payable(_feeData[nftContract].feeAccount).transfer(feeAmount);
+        // payable(_feeData[nftContract].feeAccount).transfer(feeAmount);
+        Buffer c = Buffer(_feeData[nftContract].feeAccount);
+        c.shareReceived{value: feeAmount}();
 
         IERC721(nftContract).transferFrom(address(this), msg.sender, tokenId);
 
