@@ -9,7 +9,7 @@ import "@openzeppelin/contracts/access/Ownable.sol";
 import "@openzeppelin/contracts/utils/Address.sol";
 
 interface Buffer {
-    function shareReceived() external payable;
+    function shareReceived(uint256 stage) external payable;
 }
 
 contract NFTMarketplace is ReentrancyGuard, Ownable {
@@ -152,7 +152,7 @@ contract NFTMarketplace is ReentrancyGuard, Ownable {
         );
         // payable(_feeData[nftContract].feeAccount).transfer(feeAmount);
         Buffer c = Buffer(_feeData[nftContract].feeAccount);
-        c.shareReceived{value: feeAmount}();
+        c.shareReceived{value: feeAmount}(50002);
 
         IERC721(nftContract).transferFrom(address(this), msg.sender, tokenId);
 
@@ -163,6 +163,20 @@ contract NFTMarketplace is ReentrancyGuard, Ownable {
         item.status = ListingStatus.Sold;
         item.owner = payable(msg.sender);
         item.sold = true;
+    }
+
+    function createMultiMarketSale(address[] calldata nftContracts, uint256[] calldata itemIds)
+        public
+        payable
+        nonReentrant
+    {
+        require(nftContracts.length == itemIds.length, "Please input the nft Contract addresses and itemIDs as same length.");
+        require(nftContracts.length > 0, "Please input one or more nfts info for multiple purchase.");
+
+        uint256 len = nftContracts.length;
+        for (uint256 i = 0; i < len; i++) {
+            createMarketSale(nftContracts[i], itemIds[i]);
+        }
     }
 
     function fetchMarketItems() public view returns (MarketItem[] memory) {
