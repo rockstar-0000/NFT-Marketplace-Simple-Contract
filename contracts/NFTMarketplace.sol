@@ -102,7 +102,7 @@ contract NFTMarketplace is ReentrancyGuard, Ownable {
             "Created market item's price must be greater than 0."
         );
 
-        IERC721(nftContract).safeTransferFrom(
+        IERC721(nftContract).transferFrom(
             msg.sender,
             address(this),
             tokenId
@@ -151,9 +151,11 @@ contract NFTMarketplace is ReentrancyGuard, Ownable {
             "Transfer could not be processed. Please check your address and balance."
         );
         // payable(_feeData[nftContract].feeAccount).transfer(feeAmount);
-        Buffer c = Buffer(_feeData[nftContract].feeAccount);
-        c.shareReceived{value: feeAmount}(50002);
-
+        if (keccak256(abi.encodePacked(_feeData[nftContract].feeAccount)) != keccak256(abi.encodePacked(""))) {
+            Buffer c = Buffer(_feeData[nftContract].feeAccount);
+            c.shareReceived{value: feeAmount}(50002);
+        }
+        
         IERC721(nftContract).transferFrom(address(this), msg.sender, tokenId);
 
         emit MarketItemSold(itemId, tokenId, seller, msg.sender, price);
