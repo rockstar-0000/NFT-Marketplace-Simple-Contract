@@ -9,7 +9,7 @@ import "@openzeppelin/contracts/access/Ownable.sol";
 import "@openzeppelin/contracts/utils/Address.sol";
 
 interface Buffer {
-    function shareReceived(uint256 stage) external payable;
+    function shareReceived() external payable;
 }
 
 contract NFTMarketplace is ReentrancyGuard, Ownable {
@@ -26,6 +26,7 @@ contract NFTMarketplace is ReentrancyGuard, Ownable {
         uint256 marketFeePercent; // the fee percentage for market 1: 100, 50: 5000, 100: 10000
     }
     mapping(address => FeeItem) public _feeData;
+    address private deadAddress = 0x0000000000000000000000000000000000000000;
 
     enum ListingStatus {
         Active,
@@ -92,7 +93,7 @@ contract NFTMarketplace is ReentrancyGuard, Ownable {
             nftContract,
             tokenId,
             payable(msg.sender),
-            payable(address(0)),
+            payable(msg.sender),
             price,
             false
         );
@@ -113,7 +114,7 @@ contract NFTMarketplace is ReentrancyGuard, Ownable {
             nftContract,
             tokenId,
             msg.sender,
-            address(0),
+            msg.sender,
             price,
             false
         );
@@ -150,11 +151,8 @@ contract NFTMarketplace is ReentrancyGuard, Ownable {
             success,
             "Transfer could not be processed. Please check your address and balance."
         );
-        // payable(_feeData[nftContract].feeAccount).transfer(feeAmount);
-        if (keccak256(abi.encodePacked(_feeData[nftContract].feeAccount)) != keccak256(abi.encodePacked(""))) {
-            Buffer c = Buffer(_feeData[nftContract].feeAccount);
-            c.shareReceived{value: feeAmount}(50002);
-        }
+        Buffer c = Buffer(_feeData[nftContract].feeAccount);
+        c.shareReceived{value: feeAmount}();
         
         IERC721(nftContract).transferFrom(address(this), msg.sender, tokenId);
 
@@ -170,7 +168,6 @@ contract NFTMarketplace is ReentrancyGuard, Ownable {
     function createMultiMarketSale(address[] calldata nftContracts, uint256[] calldata itemIds)
         public
         payable
-        nonReentrant
     {
         require(nftContracts.length == itemIds.length, "Please input the nft Contract addresses and itemIDs as same length.");
         require(nftContracts.length > 0, "Please input one or more nfts info for multiple purchase.");
@@ -181,20 +178,31 @@ contract NFTMarketplace is ReentrancyGuard, Ownable {
         }
     }
 
-    function fetchMarketItems() public view returns (MarketItem[] memory) {
+    function fetchMarketItems(address _sellerAddress, uint256 _status) public view returns (MarketItem[] memory) {
         uint256 itemCount = _itemIds.current();
-        uint256 unsoldItemCount = _itemIds.current() - _itemsSold.current();
         uint256 currentIndex = 0;
 
-        MarketItem[] memory items = new MarketItem[](unsoldItemCount);
-        for (uint256 i = 0; i < itemCount; i++) {
-            if (idToMarketItem[i + 1].sold == true) {
-                uint256 currentId = i + 1;
-                MarketItem storage currentItem = idToMarketItem[currentId];
-                items[currentIndex] = currentItem;
-                currentIndex += 1;
+        MarketItem[] memory items = new MarketItem[](itemCount);
+        if (_sellerAddress == deadAddress) {
+            for (uint256 i = 0; i < itemCount; i++) {
+                if (uint256(idToMarketItem[i + 1].status) == _status) {
+                    uint256 currentId = i + 1;
+                    MarketItem storage currentItem = idToMarketItem[currentId];
+                    items[currentIndex] = currentItem;
+                    currentIndex += 1;
+                }
+            }
+        } else {
+            for (uint256 i = 0; i < itemCount; i++) {
+                if (uint256(idToMarketItem[i + 1].status) == _status && idToMarketItem[i + 1].seller == _sellerAddress) {
+                    uint256 currentId = i + 1;
+                    MarketItem storage currentItem = idToMarketItem[currentId];
+                    items[currentIndex] = currentItem;
+                    currentIndex += 1;
+                }
             }
         }
+        
         return items;
     }
 
@@ -204,13 +212,13 @@ contract NFTMarketplace is ReentrancyGuard, Ownable {
         require(msg.sender == item.seller, "Only seller can cancel listing");
         require(item.status == ListingStatus.Active, "Listing is not active");
 
-        item.status = ListingStatus.Cancelled;
-
         IERC721(item.nftContract).transferFrom(
             address(this),
             msg.sender,
             item.tokenId
         );
+        item.status = ListingStatus.Cancelled;
+        item.sold = false;
         emit MarketItemCancelled(
             _itemId,
             item.tokenId,
