@@ -8,25 +8,16 @@ import "@openzeppelin/contracts/utils/introspection/ERC165Checker.sol";
 import "@openzeppelin/contracts/access/Ownable.sol";
 import "@openzeppelin/contracts/utils/Address.sol";
 
-interface Buffer {
-    function shareReceived() external payable;
-}
-
 contract NFTMarketplace is ReentrancyGuard, Ownable {
     using Counters for Counters.Counter;
     using ERC165Checker for address;
     using Address for address;
-
-    Counters.Counter private _itemIds;
-    Counters.Counter private _itemsSold;
 
     struct FeeItem {
         address payable feeAccount; // the account that recieves fees
         uint256 feePercent; // the fee percentage on sales 1: 100, 50: 5000, 100: 10000
         uint256 marketFeePercent; // the fee percentage for market 1: 100, 50: 5000, 100: 10000
     }
-    mapping(address => FeeItem) public _feeData;
-    address private deadAddress = 0x0000000000000000000000000000000000000000;
 
     enum ListingStatus {
         Active,
@@ -46,6 +37,11 @@ contract NFTMarketplace is ReentrancyGuard, Ownable {
     }
 
     mapping(uint256 => MarketItem) private idToMarketItem;
+    mapping(address => FeeItem) public _feeData;
+
+    Counters.Counter private _itemIds;
+    Counters.Counter private _itemsSold;
+    address private deadAddress = 0x0000000000000000000000000000000000000000;
 
     event MarketItemCreated(
         uint256 indexed itemId,
@@ -80,7 +76,7 @@ contract NFTMarketplace is ReentrancyGuard, Ownable {
     ) public nonReentrant {
         require(
             Address.isContract(nftContract),
-            "The address must be the NFT contract address."
+            "The address must be the NFT contract."
         );
         require(price > 0, "Price must be greater than 0.");
 
@@ -96,17 +92,6 @@ contract NFTMarketplace is ReentrancyGuard, Ownable {
             payable(msg.sender),
             price,
             false
-        );
-
-        require(
-            idToMarketItem[itemId].price > 0,
-            "Created market item's price must be greater than 0."
-        );
-
-        IERC721(nftContract).transferFrom(
-            msg.sender,
-            address(this),
-            tokenId
         );
 
         emit MarketItemCreated(
@@ -127,7 +112,7 @@ contract NFTMarketplace is ReentrancyGuard, Ownable {
     {
         require(
             Address.isContract(nftContract),
-            "The address must be the NFT contract address."
+            "The address must be the NFT contract."
         );
         uint256 price = idToMarketItem[itemId].price;
         uint256 tokenId = idToMarketItem[itemId].tokenId;
@@ -135,26 +120,30 @@ contract NFTMarketplace is ReentrancyGuard, Ownable {
         address seller = idToMarketItem[itemId].seller;
         require(
             msg.value == price,
-            "Please submit the asking price in order to complete the purchase"
+            "Please submit the price correctly."
         );
         require(!item.sold, "This Sale has alredy finnished");
         require(item.status == ListingStatus.Active, "Listing is not active");
 
         uint256 feeAmount = (_feeData[nftContract].feePercent * price) / 10000;
-        uint256 marketFee = (_feeData[nftContract].marketFeePercent * price) /
-            10000;
+        uint256 marketFee = (_feeData[nftContract].marketFeePercent * price) / 10000;
+
+        IERC721(nftContract).transferFrom(seller, msg.sender, tokenId);
         // transfer the (item price - royalty amount - fee amount) to the seller
-        (bool success, ) = payable(item.seller).call{
+        (bool successSeller, ) = payable(item.seller).call{
             value: price - feeAmount - marketFee
         }("");
         require(
-            success,
-            "Transfer could not be processed. Please check your address and balance."
+            successSeller,
+            "Transfer to seller could not be processed."
         );
-        Buffer c = Buffer(_feeData[nftContract].feeAccount);
-        c.shareReceived{value: feeAmount}();
-        
-        IERC721(nftContract).transferFrom(address(this), msg.sender, tokenId);
+        (bool successFee, ) = payable(_feeData[nftContract].feeAccount).call{
+            value: feeAmount
+        }("");
+        require(
+            successFee,
+            "Transfer to royalty could not be processed."
+        );
 
         emit MarketItemSold(itemId, tokenId, seller, msg.sender, price);
 
@@ -169,13 +158,73 @@ contract NFTMarketplace is ReentrancyGuard, Ownable {
         public
         payable
     {
-        require(nftContracts.length == itemIds.length, "Please input the nft Contract addresses and itemIDs as same length.");
-        require(nftContracts.length > 0, "Please input one or more nfts info for multiple purchase.");
+        require(nftContracts.length == itemIds.length, "Please input the same length's info");
 
         uint256 len = nftContracts.length;
         for (uint256 i = 0; i < len; i++) {
             createMarketSale(nftContracts[i], itemIds[i]);
         }
+    }
+
+    function cancelSale(uint256 _itemId) public {
+        MarketItem storage item = idToMarketItem[_itemId];
+
+        require(msg.sender == item.seller, "Only seller can cancel listing");
+        require(item.status == ListingStatus.Active, "Listing is not active");
+
+        item.status = ListingStatus.Cancelled;
+        item.sold = false;
+        emit MarketItemCancelled(
+            _itemId,
+            item.tokenId,
+            item.seller,
+            item.owner,
+            item.price
+        );
+    }
+
+    //only owner
+    function updateInvalidOrder(uint256 _itemId) public onlyOwner {
+        MarketItem storage item = idToMarketItem[_itemId];
+        require(item.status == ListingStatus.Active, "Listing is not active");
+        item.status = ListingStatus.Cancelled;
+        item.sold = false;
+        emit MarketItemCancelled(
+            _itemId,
+            item.tokenId,
+            item.seller,
+            item.owner,
+            item.price
+        );
+    }
+
+    function setFeeInfo(
+        address nftContract,
+        uint256 _marketFeePercent,
+        uint256 _feePercent,
+        address _feeAccount
+    ) public onlyOwner {
+        require(
+            Address.isContract(nftContract),
+            "The address must be the NFT contract."
+        );
+        require(
+            _feePercent + _marketFeePercent <= 10000,
+            "The sum of fees already exceeded."
+        );
+        _feeData[nftContract].marketFeePercent = _marketFeePercent;
+        _feeData[nftContract].feePercent = _feePercent;
+        _feeData[nftContract].feeAccount = payable(_feeAccount);
+    }
+
+    function withdraw() public payable onlyOwner {
+        (bool success, ) = payable(msg.sender).call{
+            value: address(this).balance
+        }("");
+        require(
+            success,
+            "Withdrawal could not be processed."
+        );
     }
 
     function fetchMarketItems(address _sellerAddress, uint256 _status) public view returns (MarketItem[] memory) {
@@ -204,57 +253,5 @@ contract NFTMarketplace is ReentrancyGuard, Ownable {
         }
         
         return items;
-    }
-
-    function cancelSale(uint256 _itemId) public {
-        MarketItem storage item = idToMarketItem[_itemId];
-
-        require(msg.sender == item.seller, "Only seller can cancel listing");
-        require(item.status == ListingStatus.Active, "Listing is not active");
-
-        IERC721(item.nftContract).transferFrom(
-            address(this),
-            msg.sender,
-            item.tokenId
-        );
-        item.status = ListingStatus.Cancelled;
-        item.sold = false;
-        emit MarketItemCancelled(
-            _itemId,
-            item.tokenId,
-            item.seller,
-            item.owner,
-            item.price
-        );
-    }
-
-    //only owner
-    function setFeeInfo(
-        address nftContract,
-        uint256 _marketFeePercent,
-        uint256 _feePercent,
-        address _feeAccount
-    ) public onlyOwner {
-        require(
-            Address.isContract(nftContract),
-            "The address must be the NFT contract address."
-        );
-        require(
-            _feePercent + _marketFeePercent <= 10000,
-            "The sum of fees already exceeded. Please add the reasonable values for them."
-        );
-        _feeData[nftContract].marketFeePercent = _marketFeePercent;
-        _feeData[nftContract].feePercent = _feePercent;
-        _feeData[nftContract].feeAccount = payable(_feeAccount);
-    }
-
-    function withdraw() public payable onlyOwner {
-        (bool success, ) = payable(msg.sender).call{
-            value: address(this).balance
-        }("");
-        require(
-            success,
-            "Withdrawal could not be processed. Please check your address and balance."
-        );
     }
 }
