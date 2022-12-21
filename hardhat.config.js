@@ -89,7 +89,7 @@
           accounts: [process.env.PRIVATE_KEY],
        },
        mainnet: {
-          gasPrice: 77000000000,
+         //  gasPrice: 77000000000,
           timeout: 1000 * 60 * 60 * 24, // 1 day
           url: process.env.MAINNET_API_URL,
           accounts: [process.env.PRIVATE_KEY],
